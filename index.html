@@ -1,0 +1,264 @@
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+<style type="text/css">
+BODY {
+	FONT-FAMILY: verdana, sans-serif
+}
+pre {background:#eeeeee;border:1px solid #777777;padding:4px}
+</style>
+<title>Yet Another Graphics Controller (YaGraphCon)</title></head>
+<body BGCOLOR=#FFFFFF>
+<h1>Yet Another Graphics Controller (YaGraphCon)</h1>
+<h2>Features</h2>
+<ul>
+  <li>generic bit depth and framebuffer size</li>
+  <li>internal block RAM for framebuffer</li>
+  <li>SPI command interface</li>
+  <li>VGA output</li>
+</ul>
+<h2>Applications</h2>
+<ul>
+  <li>graphics output for small and slow microcontrollers</li>
+  <li>process visualization</li>
+  <li>portable instrumentation</li>
+  <li>games</li>
+  <li>homebrew electronics</li>
+</ul>
+<h2>General Description</h2>
+<p>This is a VHDL implementation of a graphics controller. You can configure the 
+  bit depth and framebuffer size at synthesize time with generic parameters.</p>
+<h2>Commands</h2>
+<p>The graphics controller is command based: You can send commands to the SPI 
+  interface and after the command is finished, the busy output is set to high 
+  again. The bit width of the internal framebuffer memory is the same as the color 
+  bit depth, so all coordinates and addresses are pixel addresses. A command is 
+  started with setting chip select to low, which is acknowledge from the controller 
+  by setting the busy output to high. The bits are sampled by the controller with 
+  the rising edges of the SPI clock, most significant bits and bytes first.</p>
+<h3>0: Reset()</h3>
+<p> Resets the controller. This command can be issued even if the graphics accelerator 
+  is busy. It stops the current graphics accleration operation and sets all internal 
+  registers to 0.</p>
+<h3>1: SetFramebufferStart(address: u24)</h3>
+<p> Sets the address of the framebuffer start for the OutputGenerator. This value 
+  buffered and transfered to the OutputGenerator on next VSync.</p>
+<h3>2: SetFramebufferPitch(offset: u16)</h3>
+<p>Sets the offset, which is added each line to the framebuffer address from the 
+  OutputGenerator to get the address of the next line. With this operation you 
+  can define a window in a wider virtual framebuffer, e.g. for faster scrolling. 
+  This value buffered and transfered to the OutputGenerator on next VSync.</p>
+<h3>3: SetDestinationStart(address: u24)</h3>
+<p>Sets the destination address of the framebuffer start for all following painting operations. With this parameter you can implement double buffering: write to an offscreen area while the current framebuffer is displayed and then switch onscreen and offscreen to avoid display inferences.</p>
+<p>Code:</p>
+<pre>
+dstStart = address;
+</pre>
+<h3>4: SetDestinationPitch(offset: u16)</h3>
+<p>Sets the line length for all following graphics operations for the destination area.</p>
+<p>Code:</p>
+<pre>
+dstPitch = offset;
+</pre>
+<h3>5: SetSourceStart(address: u24)</h3>
+<p>Sets the framebuffer start for source area the Blit command.</p>
+<p>Code:</p>
+<pre>
+srcStart = address;
+</pre>
+<h3>6: SetSourcePitch(offset: u16)</h3>
+<p>Sets the line length for the source area for the Blit command.</p>
+<p>Code:</p>
+<pre>
+srcPitch = offset;
+</pre>
+<h3>7: SetColor(color: depth)</h3>
+<p>Sets the color. The bit width is the same as the bit width of the framebuffer.</p>
+<p>Code:</p>
+<pre>
+currentColor = color;
+</pre>
+<h3>8: SetPixel(x: u16, y: u16)</h3>
+<p>Sets a pixel to the current color.</p>
+<p>Code:</p>
+<pre>
+dstStart[x + y * dstPitch] = currentColor;
+</pre>
+<h3>9: MoveTo(x: u16, y: u16)</h3>
+<p>Sets the start point for the LineTo command.</p>
+<p>Code:</p>
+<pre>
+lineX0 = x;
+lineY0 = y;
+</pre>
+<h3>10: LineTo(x: u16, y: u16)</h3>
+<p>Draws a line from the current start position to the specified position. Then updates the current start position with the specified position.</p>
+<p>Code:</p>
+<pre>
+void setPixel(x, y) {
+	dstStart[x + y * dstPitch] = currentColor;
+}
+x2 = lineX0;
+y2 = lineY0;
+int dx, incx, dy, incy, balance;
+if (x2 >= x) {
+	dx = x2 - x;
+	incx = 1;
+} else {
+	dx = x - x2;
+	incx = -1;
+}
+if (y2 >= y) {
+	dy = y2 - y;
+	incy = 1;
+} else {
+	dy = y - y2;
+	incy = -1;
+}
+if (dx >= dy) {
+	dy <<= 1;
+	balance = dy - dx;
+	dx <<= 1;
+	while (x != x2) {
+		setPixel(x, y);
+		if (balance >= 0) {
+			y += incy;
+			balance -= dx;
+		}
+		balance += dy;
+		x += incx;
+	}
+	setPixel(x, y);
+} else {
+	dx <<= 1;
+	balance = dx - dy;
+	dy <<= 1;
+	while (y != y2) {
+		setPixel(x, y);
+		if (balance >= 0) {
+			x += incx;
+			balance -= dy;
+		}
+		balance += dx;
+		y += incy;
+	}
+	setPixel(x, y);
+}
+lineX0 = x2;
+lineY0 = y2;
+</pre>
+<h3>11: FillRect(x0: u16, y0: 16, width: u16, height: u16)</h3>
+<p>Fills a rectangle. If width or height is 0, no pixel is set.</p>
+<p>Code:</p>
+<pre>
+for (int y = 0; y < height; y++) {
+	for (int x = 0; x < width; x++) {
+		dstStart[(x + x0) + (y + y0) * dstPitch] = currentColor;
+	}
+}
+</pre>
+<h3>12: BlitSize(width: u16, height: u16)</h3>
+<p>Sets the width and height for all follwing Blit commands. This command is useful 
+  for reducing data transfer size, if you want to blit multiple areas of the same 
+  size, e.g. for text output with a font with a fixed font width.</p>
+<p>Code:</p>
+<pre>
+blitWidth = width;
+blitHeight = height;
+</pre>
+<h3>13: Blit(sourceX: u16, sourceY: u16, destinationX: u16, destinationY: u16)</h3>
+<p>Copies the specified source area (with BlitSize) to the destination area.</p>
+<p>Code:</p>
+<pre>
+for (int y = 0; y < blitHeight; y++) {
+	for (int x = 0; x < blitWidth; x++) {
+		dstStart[(x + destinationX) + (y + destinationY) * dstPitch] = srcStart[(x + sourceX) + (y + sourceY) * srcPitch];
+	}
+}
+</pre>
+<h3>14: BlitTransparent(sourceX: u16, sourceY: u16, destinationX: u16, destinationY: 
+  u16)</h3>
+<p>Same as Blit, but the current color is used as transparent color: All pixels 
+  of the source area with this color are not copied to the destination area.</p>
+<p>Code:</p>
+<pre>
+for (int y = 0; y < blitHeight; y++) {
+	for (int x = 0; x < blitWidth; x++) {
+		Color c = srcStart[(x + sourceX) + (y + sourceY) * srcPitch];
+		if (c != currentColor) {
+			dstStart[(x + destinationX) + (y + destinationY) * dstPitch] = c;
+		}
+	}
+}
+</pre>
+<h3>15: WriteFramebuffer(address: u24, size: u24, data: bits)</h3>
+<p>Writes data into the framebuffer, starting at the specified address. The data is a contiguous stream of bits with a bit length which is a multiple of the bit depth of the framebuffer. This command is useful e.g. for downloading fonts or other graphics in offscreen area, or even for slow updates of the framebuffer itself. Some SPI transmitters can transmit only on byte or word boundaries. To avoid overwriting too many pixels, any bits after the specified size are ignored.</p>
+<p>Code:</p>
+<pre>
+for (int i = 0; i < size; i++) {
+	address[i] = nextPixelColorFromSpi();
+}
+</pre>
+<h2>Hardware Interface</h2>
+<h3>Microcontroller Side</h3>
+<p>SPI Chipselect<br />
+  SPI Data<br />
+  SPI Clock<br />
+  VSync<br />
+Busy</p>
+<h3>Output side</h3>
+<p>Example for 64 colors VGA output:</p>
+<p>red[2]<br />
+  green[2]<br />
+  blue[2]<br />
+  HSync<br />
+  VSync</p>
+<h2>VHDL Architecture</h2>
+<p>For maximum flexibility there are multiple modules with well designed interfaces. 
+  You can replace individual modules for your application needs. For easier implementation, 
+  all modules are clocked by one central clock.</p>
+<h3>YaGraphCon</h3>
+<p>Main entity, with the physical input and output lines. Instantiates and connects 
+  the other entities, receives the SPI commands and translates it to the Framebuffer 
+  and GraphicsAccelerator entities.</p>
+<h3>Framebuffer</h3>
+<p>Provides the RAM interfaces: two read ports and one write port. The OutputGenerator 
+  uses one read port and the GraphicsAccelerator the other read port. The write 
+  port is used by the YaGraphCon main entity for writing to the framebuffer and 
+  by the GraphicsAccelerator for writing.</p>
+<h3>OutputGenerator</h3>
+<p>Reads the framebuffer and generates a VGA output signal.</p>
+<h3>GraphicsAccelerator</h3>
+<p>Register based graphics accelerators.</p>
+<h2>Example application</h2>
+<p>Configured for 1 pixel depth and a 320x240 resolution, the video memory and 
+  a font fits in a block RAM of the FPGA on the Spartan 3E Starterkit. This is 
+  the 16x16 bitmap font from <a href="http://www.zee-3.com/pickfordbros/archive/bitmapfonts.php">Ste's 
+  Bitmap Fonts page</a>:</p>
+<p><img src="font.png" width="232" height="96"></p>
+<p> I've converted it with a Java program to a C array. The FPGA main entity includes 
+  a RS232 receiver for translating the received signals to SPI. The controlling 
+  program runs on PC. The final image from the test program looks like this:</p>
+<p><img src="test.png" width="375" height="295"></p>
+<p>YouTube video:</p>
+<p>
+  <object width="425" height="344">
+    <param name="movie" value="http://www.youtube.com/v/RttajqhNpzw&hl=de&fs=1&"></param>
+    <param name="allowFullScreen" value="true"></param>
+    <param name="allowscriptaccess" value="always"></param>
+    <embed src="http://www.youtube.com/v/RttajqhNpzw&hl=de&fs=1&" type="application/x-shockwave-flash" allowscriptaccess="always" allowfullscreen="true" width="425" height="344"></embed></object>
+</p>
+<p>The speed is low, because the PC is bit banging the SPI protocol over an USB 
+  serial adapter. The speed of the graphics operations is 50 mega pixels per second 
+  on the Spartan 3E Starterkit. Maximum SPI clock can be 25 MHz.</p>
+<h2>Source code</h2>
+<p><a href="spartan3e.zip">Xilinx ISE 11 project and VHDL sources</a></p>
+<p><a href="pctest.zip">PC test program and compiled exe file</a></p>
+<p><a href="FontConverter.java">Java Font converter program</a></p>
+<HR>
+<p><a href="mailto:fb@frank-buss.de"><img src="/img/email.gif" width="64" height="64" align="left" border="0"></a>
+<address>
+23. August 2009, <a href="mailto:fb@frank-buss.de">Frank Bu&szlig;</a> 
+</address>
+</body>
+</html>
